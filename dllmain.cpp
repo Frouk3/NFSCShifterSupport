@@ -12,6 +12,8 @@
 #include "licenses.h"
 #include "Logger.hpp"
 
+#define VERSION "1.0"
+
 /*
 * TODO:
 * [ ] - Add a clutch system for shifting
@@ -175,7 +177,10 @@ BOOL CALLBACK EnumDevicesCallback(LPCDIDEVICEINSTANCEA lpddi, LPVOID pvRef)
 
 	LPDIRECTINPUTDEVICE8A pDevice = nullptr;
 	if (FAILED(g_pInput->CreateDevice(lpddi->guidInstance, &pDevice, nullptr)))
+	{
+		LogError("Failed to create device for %s", lpddi->tszProductName);
 		return DIENUM_CONTINUE;
+	}
 
 	cConnectedDevice* pConnectedDevice = new cConnectedDevice(pDevice, lpddi->dwDevType, lpddi->tszProductName);
 
@@ -219,11 +224,12 @@ const char* toString(enum GearPreference gearPreference)
 			return "Sequential";
 		case SHIFTER_AUTOMATIC:
 			return "Automatic";
-		default: // optimisation: jmp returnunklabel
+		case SHIFTER_DO_NOT_USE:
+			return "None";
+		default:
 			return "Unknown";
 	}
 
-	// returnunklabel:
 	return "Unknown";
 }
 
@@ -833,7 +839,7 @@ void DrawMenu()
 		}
 		if (ImGui::BeginTabItem("About"))
 		{
-			ImGui::Text("NFSC Shifter Support 1.0");
+			ImGui::Text("NFSC Shifter Support " VERSION);
 			ImGui::Text("Developed by: Frouk");
 			ImGui::TextLinkOpenURL("Project is open source and is available on GitHub.(press this text to open repository)", "https://github.com/Frouk3/NFSCShifterSupport");
 
