@@ -13,6 +13,8 @@ jobs:
     steps:
     - name: Checkout Code
       uses: actions/checkout@v4
+      with:
+        submodules: recursive
 
     # Step 2: Make MSBuild available in the runner's PATH environment
     - name: Setup MSBuild
