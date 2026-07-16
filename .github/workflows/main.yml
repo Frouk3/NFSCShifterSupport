@@ -21,4 +21,4 @@ jobs:
     # Step 3: Compile using the .slnx file exactly like a legacy .sln file
     - name: Build SLNX Solution
       run: |
-        msbuild YourProject.slnx /p:Configuration=Release /p:Platform=x64
+        msbuild NFSCShifterSupport.slnx /p:Configuration=Release /p:Platform=x86
