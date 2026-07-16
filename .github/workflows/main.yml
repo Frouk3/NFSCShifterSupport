@@ -1,0 +1,26 @@
+name: MSVC SLNX Build Workflow
+
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+    branches: [ "master" ]
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    # Step 2: Make MSBuild available in the runner's PATH environment
+    - name: Setup MSBuild
+      uses: microsoft/setup-msbuild@v2
+
+    # Step 3: Compile using the .slnx file exactly like a legacy .sln file
+    - name: Build SLNX Solution
+      run: |
+        msbuild NFSCShifterSupport.slnx /p:Configuration=Release /p:Platform=x86
