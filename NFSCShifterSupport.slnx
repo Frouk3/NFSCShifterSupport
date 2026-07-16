@@ -1,0 +1,7 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Project Path="NFSCShifterSupport.vcxproj" Id="88936dbc-a66f-41be-a4c9-16be3cba23bf" />
+</Solution>
