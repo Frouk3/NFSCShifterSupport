@@ -1,4 +1,5 @@
 #pragma once
+
 #include "SafeHook/SafeHook.h"
 
 namespace Hooks {}
