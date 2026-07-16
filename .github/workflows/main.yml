@@ -3,8 +3,13 @@ name: MSVC SLNX Build Workflow
 on:
   push:
     branches: [ "master" ]
+    tags:
+      - "v*"
   pull_request:
     branches: [ "master" ]
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -25,23 +30,27 @@ jobs:
         path: ${{ github.workspace }}\dxsdk
         key: dxsdk-june2010-v1
 
+    # Step 3: Download and extract DirectX June 2010 if cache missed
     - name: Download & Extract DirectX SDK
       if: steps.cache-dxsdk.outputs.cache-hit != 'true'
       shell: powershell
       run: |
-        # Download the official June 2010 DX SDK installer
-        Invoke-WebRequest -Uri "https://download.microsoft.com/download/a/e/7/ae743f1f-632b-4809-87a9-aa1bb3458e31/DXSDK_Jun10.exe" -OutFile "dxsdk.exe"
+        # 1. Disable the progress bar to instantly boost download speeds
+        $ProgressPreference = 'SilentlyContinue'
         
-        # Use 7z (pre-installed on the runner) to extract ONLY the Include and Lib directories
+        # 2. Use curl.exe (much faster than Invoke-WebRequest)
+        curl.exe -L -o "dxsdk.exe" "https://download.microsoft.com/download/a/e/7/ae743f1f-632b-4809-87a9-aa1bb3458e31/DXSDK_Jun10.exe"
+        
+        # 3. Extract to temporary folder
         & "C:\Program Files\7-Zip\7z.exe" x dxsdk.exe DXSDK/Include -o_temp
         & "C:\Program Files\7-Zip\7z.exe" x dxsdk.exe DXSDK/Lib/x86 -o_temp
         
-        # Move them to our dedicated workspace directory
+        # 4. Organize target directory
         New-Item -ItemType Directory -Force -Path "${{ github.workspace }}\dxsdk"
         Move-Item -Path "_temp\DXSDK\Include" -Destination "${{ github.workspace }}\dxsdk\Include"
         Move-Item -Path "_temp\DXSDK\Lib" -Destination "${{ github.workspace }}\dxsdk\Lib"
         
-        # Cleanup installers
+        # 5. Clean up files
         Remove-Item -Path "dxsdk.exe" -Force
         Remove-Item -Path "_temp" -Recurse -Force
 
@@ -56,3 +65,12 @@ jobs:
     - name: Build SLNX Solution
       run: |
         msbuild NFSCShifterSupport.slnx /p:Configuration=Release /p:Platform=x86
+        
+    - name: Create GitHub Release
+      if: startsWith(github.ref, 'refs/tags/')
+      uses: softprops/action-gh-release@v2
+      with:
+        files: |
+          Release/*.asi
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
