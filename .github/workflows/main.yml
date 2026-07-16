@@ -9,6 +9,8 @@ on:
 jobs:
   build:
     runs-on: windows-latest
+    env:
+      DXSDK_DIR: ${{ github.workspace }}\dxsdk\
 
     steps:
     - name: Checkout Code
@@ -16,11 +18,41 @@ jobs:
       with:
         submodules: recursive
 
-    # Step 2: Make MSBuild available in the runner's PATH environment
+    - name: Cache DirectX SDK
+      id: cache-dxsdk
+      uses: actions/cache@v4
+      with:
+        path: ${{ github.workspace }}\dxsdk
+        key: dxsdk-june2010-v1
+
+    - name: Download & Extract DirectX SDK
+      if: steps.cache-dxsdk.outputs.cache-hit != 'true'
+      shell: powershell
+      run: |
+        # Download the official June 2010 DX SDK installer
+        Invoke-WebRequest -Uri "https://download.microsoft.com/download/a/e/7/ae743f1f-632b-4809-87a9-aa1bb3458e31/DXSDK_Jun10.exe" -OutFile "dxsdk.exe"
+        
+        # Use 7z (pre-installed on the runner) to extract ONLY the Include and Lib directories
+        & "C:\Program Files\7-Zip\7z.exe" x dxsdk.exe DXSDK/Include -o_temp
+        & "C:\Program Files\7-Zip\7z.exe" x dxsdk.exe DXSDK/Lib/x86 -o_temp
+        
+        # Move them to our dedicated workspace directory
+        New-Item -ItemType Directory -Force -Path "${{ github.workspace }}\dxsdk"
+        Move-Item -Path "_temp\DXSDK\Include" -Destination "${{ github.workspace }}\dxsdk\Include"
+        Move-Item -Path "_temp\DXSDK\Lib" -Destination "${{ github.workspace }}\dxsdk\Lib"
+        
+        # Cleanup installers
+        Remove-Item -Path "dxsdk.exe" -Force
+        Remove-Item -Path "_temp" -Recurse -Force
+
+    - name: Set DXSDK_DIR Environment Variable
+      shell: bash
+      run: |
+        echo "DXSDK_DIR=${{ github.workspace }}\\dxsdk\\" >> $GITHUB_ENV
+
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v2
 
-    # Step 3: Compile using the .slnx file exactly like a legacy .sln file
     - name: Build SLNX Solution
       run: |
         msbuild NFSCShifterSupport.slnx /p:Configuration=Release /p:Platform=x86
