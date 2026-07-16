@@ -1058,6 +1058,8 @@ CREATE_HOOK(false, 0x73A380, void*, __cdecl, Render_init)
 					g_bMenuOpen ^= true;
 					ShowMouseCursorImGui(g_bMenuOpen);
 				}
+
+				ThreadWork::UpdateThreads();
 			};
 	}
 	return result;
