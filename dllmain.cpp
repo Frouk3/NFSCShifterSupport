@@ -134,6 +134,7 @@ IDirect3DDevice9*& g_pDevice = *(IDirect3DDevice9**)0xAB0ABC;
 HWND& g_hWnd = *(HWND*)0xAB0AD8;
 
 char g_PedalsAxis[3] = { DIJOFS_RZ, DIJOFS_Y, DIJOFS_SLIDER(0) };
+bool g_PedalsAxisInverted[3] = { false, false, false };
 
 struct PedalsAxes
 {
@@ -154,19 +155,35 @@ const PedalsAxes& GetPedalsAxes(DIJOYSTATE2* pState)
 	if (g_PedalsAxis[2] != -1)
 		axes.clutch = *(LONG*)((char*)pState + g_PedalsAxis[2]);
 
+	if (g_PedalsAxisInverted[0])
+		axes.throttle = 0xFFFF - axes.throttle;
+	if (g_PedalsAxisInverted[1])
+		axes.brake = 0xFFFF - axes.brake;
+	if (g_PedalsAxisInverted[2])
+		axes.clutch = 0xFFFF - axes.clutch;
+
 	return axes;
 }
 
 void SetPedalsAxes(DIJOYSTATE2* pState, const PedalsAxes& axes)
 {
+	PedalsAxes adjustedAxes = axes;
+
+	if (g_PedalsAxisInverted[0])
+		adjustedAxes.throttle = 0xFFFF - adjustedAxes.throttle;
+	if (g_PedalsAxisInverted[1])
+		adjustedAxes.brake = 0xFFFF - adjustedAxes.brake;
+	if (g_PedalsAxisInverted[2])
+		adjustedAxes.clutch = 0xFFFF - adjustedAxes.clutch;
+
 	if (g_PedalsAxis[0] != -1)
-		*(LONG*)((char*)pState + g_PedalsAxis[0]) = (LONG)axes.throttle;
+		*(LONG*)((char*)pState + g_PedalsAxis[0]) = (LONG)adjustedAxes.throttle;
 
 	if (g_PedalsAxis[1] != -1)
-		*(LONG*)((char*)pState + g_PedalsAxis[1]) = (LONG)axes.brake;
+		*(LONG*)((char*)pState + g_PedalsAxis[1]) = (LONG)adjustedAxes.brake;
 
 	if (g_PedalsAxis[2] != -1)
-		*(LONG*)((char*)pState + g_PedalsAxis[2]) = (LONG)axes.clutch;
+		*(LONG*)((char*)pState + g_PedalsAxis[2]) = (LONG)adjustedAxes.clutch;
 }
 
 const char* GetPedalsAxisOffsetName(LONG offset)
@@ -364,6 +381,7 @@ LPDIRECTINPUTDEVICE8A GetShifterDevice()
 	return nullptr;
 }
 
+int g_AutomaticGearState = GEAR_NEUTRAL;
 SafeHook::MidAsmHook ShifterBehavior(0x428E65, [](SafeHook::CTX& ctx)
 {
 	unsigned int _this = ctx.edi.i32;
@@ -432,33 +450,12 @@ SafeHook::MidAsmHook ShifterBehavior(0x428E65, [](SafeHook::CTX& ctx)
 				}
 				case SHIFTER_AUTOMATIC:
 				{
-					static int gearState = GEAR_NEUTRAL;
-					unsigned int something = _this - 0x248;
-					float maybeRPMRange = *(float*)(_this + 0x3C);
-
 					if (g_KeyBoundMap[GEAR_REVERSE] != -1 && (shifterState.rgbButtons[g_KeyBoundMap[GEAR_REVERSE]] & 0x80))
-						gearState = GEAR_REVERSE;
+						g_AutomaticGearState = GEAR_REVERSE;
 					else if (g_KeyBoundMap[GEAR_NEUTRAL] != -1 && (shifterState.rgbButtons[g_KeyBoundMap[GEAR_NEUTRAL]] & 0x80))
-						gearState = GEAR_NEUTRAL;
+						g_AutomaticGearState = GEAR_NEUTRAL;
 					else if (g_KeyBoundMap[GEAR_FIRST] != -1 && (shifterState.rgbButtons[g_KeyBoundMap[GEAR_FIRST]] & 0x80))
-						gearState = GEAR_FIRST;
-
-					switch (gearState)
-					{
-						case GEAR_FIRST: // e.g. Drive mode
-							MAKE_CALL(0x4193C0, void(__thiscall*)(unsigned int, float, float), _this - 0x294, maybeRPMRange, 1.0f);
-							break;
-						case GEAR_NEUTRAL:
-							MAKE_CALL(0x419290, void(__thiscall*)(unsigned int, int), _this - 0x294, GEAR_NEUTRAL);
-							break;
-						case GEAR_REVERSE:
-							MAKE_CALL(0x419290, void(__thiscall*)(unsigned int, int), _this - 0x294, GEAR_REVERSE);
-							break;
-						default:
-							break;
-					}
-
-					MAKE_CALL(0x4191D0, void(__thiscall*)(unsigned int, float, float), _this - 0x294, maybeRPMRange, (float)(gearState - 1));
+						g_AutomaticGearState = GEAR_FIRST;
 				}
 				default:
 					break;
@@ -494,7 +491,9 @@ SafeHook::MidAsmHook PedalsFix(0x892A36, [](SafeHook::CTX& ctx)
 {
 	if (!g_bPedalFix)
 	{
-		wheelStateHistory = *(DIJOYSTATE2*)(ctx.ebp.i32 - 0x13C);
+		if (ctx.eax().i32 == 0)
+			wheelStateHistory = *(DIJOYSTATE2*)(ctx.ebp.i32 - 0x13C); // store the state for later use
+
 		return;
 	}
 
@@ -520,6 +519,19 @@ SafeHook::MidAsmHook PedalsFix(0x892A36, [](SafeHook::CTX& ctx)
 
 	wheelStateHistory = *pWheelState; // store the state for later use
 });
+
+CREATE_THISCALL(false, 0x40B410, bool, AIVehicle_IsAutoShiftEnabled, void*)
+{
+	if (g_ShifterPreference != SHIFTER_DO_NOT_USE)
+	{
+		if (g_ShifterPreference == SHIFTER_AUTOMATIC)
+			return g_AutomaticGearState >= GEAR_FIRST;
+
+		return false; // we don't want the game to auto shift for us, we will handle it ourselves
+	}
+
+	return original(pThis);
+}
 
 float g_WelcomeTimer = 5.f;
 bool g_bMenuOpen = false;
@@ -636,6 +648,7 @@ void SaveConfig()
 	{
 		const char* axis = GetPedalsAxisOffsetName(g_PedalsAxis[i]);
 		ini.WriteString("PedalsButtons", i == 0 ? "Throttle" : i == 1 ? "Brake" : "Clutch", axis);
+		ini.WriteBool("PedalsButtons", i == 0 ? "ThrottleInverted" : i == 1 ? "BrakeInverted" : "ClutchInverted", g_PedalsAxisInverted[i]);
 	}
 }
 
@@ -675,10 +688,12 @@ void LoadConfig()
 	{
 		const char* axis = ini.ReadString("PedalsButtons", i == 0 ? "Throttle" : i == 1 ? "Brake" : "Clutch", "").c_str();
 
-		for (int i = 0; i < 8; i++)
+		g_PedalsAxisInverted[i] = ini.ReadBool("PedalsButtons", i == 0 ? "ThrottleInverted" : i == 1 ? "BrakeInverted" : "ClutchInverted", g_PedalsAxisInverted[i]);
+
+		for (int j = 0; j < 8; j++)
 		{
 			bool breakLoop = false;
-			switch (i)
+			switch (j)
 			{
 				case 0: // X
 					break;
@@ -835,7 +850,7 @@ void DrawMenu()
 							}
 							else
 							{
-								ImGui::TextDisabled("No shifter device detected. Please select and select your shifter.");
+								ImGui::TextDisabled("No shifter device detected. Please select your shifter.");
 							}
 							ImGui::EndPopup();
 						}
@@ -887,7 +902,7 @@ void DrawMenu()
 							}
 							else
 							{
-								ImGui::TextDisabled("No shifter device detected. Please select and select your shifter.");
+								ImGui::TextDisabled("No shifter device detected. Please select your shifter.");
 							}
 							ImGui::EndPopup();
 						}
@@ -951,7 +966,7 @@ void DrawMenu()
 							}
 							else
 							{
-								ImGui::TextDisabled("No shifter device detected. Please select and select your shifter.");
+								ImGui::TextDisabled("No shifter device detected. Please select your shifter.");
 							}
 
 							ImGui::EndPopup();
@@ -967,6 +982,45 @@ void DrawMenu()
 					break;
 				}
 			}
+			if (ImGui::Button("Test Shifter"))
+				ImGui::OpenPopup("TestShifterPopup");
+
+			if (ImGui::BeginPopup("TestShifterPopup"))
+			{
+				ImGui::Text("Press buttons on your shifter to see the detected gears.");
+				LPDIRECTINPUTDEVICE8A pShifterDevice = GetShifterDevice();
+				if (pShifterDevice)
+				{
+					if (HRESULT hr = pShifterDevice->Acquire(); hr != DI_OK)
+						pShifterDevice->Acquire();
+					pShifterDevice->Poll();
+					DIJOYSTATE2 shifterState{ 0 };
+					if (HRESULT hr = pShifterDevice->GetDeviceState(sizeof(DIJOYSTATE2), &shifterState); hr == DI_OK)
+					{
+						for (int i = 0; i < 32; i++)
+						{
+							if (shifterState.rgbButtons[i] & 0x80)
+								ImGui::TextColored({ 1.f, 1.f, 1.f, 1.f }, "%d", i + 1);
+							else
+								ImGui::TextColored({ 0.5f, 0.5f, 0.5f, 1.f }, "%d", i + 1);
+
+							if ((i + 1) % 8 != 0)
+								ImGui::SameLine();
+							else
+								ImGui::Spacing();
+						}
+					}
+					else
+					{
+						ImGui::Text("Failed to get shifter state. Error: 0x%08X", hr);
+					}
+				}
+				else
+				{
+					ImGui::TextDisabled("No shifter device detected. Please select your shifter.");
+				}
+				ImGui::EndPopup();
+			}
 			ImGui::Separator();
 			ImGui::Text("Pedal Bindings:");
 			{
@@ -981,6 +1035,9 @@ void DrawMenu()
 					ImGui::SameLine();
 					if (ImGui::Button("Rebind"))
 						ImGui::OpenPopup("RebindPedalPopup");
+					
+					ImGui::SameLine();
+					ImGui::Checkbox("Inverted", &g_PedalsAxisInverted[pedal]);
 
 					if (ImGui::BeginPopup("RebindPedalPopup"))
 					{
@@ -1109,6 +1166,51 @@ void DrawMenu()
 					ImGui::PopID();
 				}
 			}
+			if (ImGui::Button("Test Wheel"))
+				ImGui::OpenPopup("TestWheelPopup");
+
+			if (ImGui::BeginPopup("TestWheelPopup"))
+			{
+				LPDIRECTINPUTDEVICE8A pWheelDevice = g_pInputDevices[0]; // Assuming the first device is the wheel
+				if (pWheelDevice)
+				{
+					if (HRESULT hr = pWheelDevice->Acquire(); hr != DI_OK)
+						pWheelDevice->Acquire();
+
+					DIJOYSTATE2 wheelState{ 0 };
+					if (HRESULT hr = pWheelDevice->GetDeviceState(sizeof(DIJOYSTATE2), &wheelState); hr == DI_OK)
+					{
+						auto AxisBar = [](const char* label, LONG value, LONG min, LONG max)
+						{
+							float perc = (float)(value - min) / (float)(max - min);
+
+							ImGui::Text(label);
+							ImGui::ProgressBar(perc);
+						};
+
+						ImGui::Dummy(ImVec2(300, 0));
+
+						AxisBar("X Axis", wheelState.lX, -10000, 10000);
+						AxisBar("Y Axis", wheelState.lY, -10000, 10000);
+						AxisBar("Z Axis", wheelState.lZ, -10000, 10000);
+						AxisBar("Rx Axis", wheelState.lRx, -10000, 10000);
+						AxisBar("Ry Axis", wheelState.lRy, -10000, 10000);
+						AxisBar("Rz Axis", wheelState.lRz, -10000, 10000);
+						AxisBar("Slider 0", wheelState.rglSlider[0], -10000, 10000);
+						AxisBar("Slider 1", wheelState.rglSlider[1], -10000, 10000);
+					}
+					else
+					{
+						ImGui::Text("Failed to get wheel state. Error: 0x%08X", hr);
+					}
+				}
+				else
+				{
+					ImGui::TextDisabled("No wheel device detected. Are you sure your wheel is connected?");
+				}
+				ImGui::EndPopup();
+			}
+			ImGui::Separator();
 			ImGui::Text("Device Selection:");
 			ImGui::BeginChild("##DeviceList", ImVec2(0, 200), ImGuiChildFlags_AutoResizeX);
 
@@ -1300,6 +1402,14 @@ void Render()
 			for (char axis : { 'X', 'Y', 'Z' })
 			{
 				sprintf_s(buffer, "Wheel Axis R%c: %hx", axis, rAxis[axis - 'X']);
+				ImGui::GetForegroundDrawList()->AddText(ImVec2(15, yOffset), -1, buffer);
+				yOffset += 15.f;
+			}
+
+			PedalsAxes pedals = GetPedalsAxes(&wheelStateHistory);
+			for (int i = 0; i < 3; i++)
+			{
+				sprintf_s(buffer, "Pedal %s: %X", i == 0 ? "Throttle" : i == 1 ? "Brake" : "Clutch", ((LONG*)&pedals)[i]);
 				ImGui::GetForegroundDrawList()->AddText(ImVec2(15, yOffset), -1, buffer);
 				yOffset += 15.f;
 			}
